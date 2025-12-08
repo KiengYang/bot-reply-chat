@@ -1,0 +1,9 @@
+services:
+  boss-bot:
+    build: .
+    container_name: boss-bot
+    restart: unless-stopped
+    env_file:
+      - .env        # reuse your existing .env with BOT_TOKEN, BOSS_ID
+    working_dir: /app
+    command: ["python", "-m", "app.bot"]
