@@ -14,11 +14,19 @@ from telegram.ext import (
 from telegram.request import HTTPXRequest
 
 # ------------------- CONFIG -------------------
-from app.config import BOT_TOKEN, BOSS_ID, TRIGGER_WORDS
+# app.config should define:
+# BOT_TOKEN, BOSS_ID, ALERT_GROUP_ID, TRIGGERS_TO_BOSS, TRIGGERS_TO_GROUP
+from app.config import (
+    BOT_TOKEN,
+    BOSS_ID,
+    ALERT_GROUP_ID,
+    TRIGGERS_TO_BOSS,
+    TRIGGERS_TO_GROUP,
+)
 
 DB_FILE = "app/db.json"
 
-# key = BOSS_ID, value = message key in DB
+# key = user_id (boss or alert group admin), value = message key in DB
 reply_map = {}
 
 
@@ -41,62 +49,83 @@ async def start(update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def manual_summary(update, context: ContextTypes.DEFAULT_TYPE):
-    """Boss can type /summary to see pending & ignored messages"""
+    """Boss can type /summary to see pending & ignored messages in a clean format."""
     db = load_db()
-    items = [
-        entry
-        for entry in db.values()
-        if entry.get("status") in ("pending", "ignored")
-    ]
+    pending = []
+    ignored = []
 
-    if not items:
-        await update.message.reply_text("📊 No pending or ignored messages today.")
+    for entry in db.values():
+        status = entry.get("status")
+        if status == "pending":
+            pending.append(entry)
+        elif status == "ignored":
+            ignored.append(entry)
+
+    if not pending and not ignored:
+        await update.message.reply_text(
+            "📊 No pending or ignored messages.",
+            parse_mode="Markdown",
+        )
         return
 
-    # Sort by time (oldest first)
-    try:
-        items.sort(key=lambda e: datetime.fromisoformat(e["time"]))
-    except Exception:
-        pass
+    def build_section(title, items):
+        if not items:
+            return f"*{title}*\n_No messages._\n\n"
 
-    msg = "📊 **Summary — Pending & Ignored Messages**\n\n"
-    for e in items:
-        status = e.get("status", "unknown").capitalize()
         try:
-            dt = datetime.fromisoformat(e["time"])
-            time_str = dt.strftime("%Y-%m-%d %H:%M")
+            items.sort(key=lambda e: datetime.fromisoformat(e["time"]))
         except Exception:
-            time_str = e.get("time", "Unknown time")
+            pass
 
-        msg += (
-            f"- [{status}] From *{e['sender']}* in *{e.get('group_title', 'group')}* "
-            f"at `{time_str}`:\n"
-        )
-        msg += f"  {e['text'][:100]}...\n"
+        text = f"*{title}*\n"
+        for e in items:
+            try:
+                dt = datetime.fromisoformat(e["time"])
+                time_str = dt.strftime("%Y-%m-%d %H:%M")
+            except Exception:
+                time_str = e.get("time", "Unknown time")
 
-        group_username = e.get("group_username")
-        group_id = e.get("group_id")
-        message_id = e.get("message_id")
+            group_title = e.get("group_title", "group")
+            sender = e.get("sender", "Unknown")
+            preview = (e.get("text") or "").replace("\n", " ")[:80]
 
-        if group_username:
-            msg += (
-                f"  Open: tg://resolve?domain={group_username}"
-                f"&post={message_id}\n\n"
+            group_username = e.get("group_username")
+            group_id = e.get("group_id")
+            message_id = e.get("message_id")
+
+            if group_username:
+                open_link = f"tg://resolve?domain={group_username}&post={message_id}"
+            elif str(group_id).startswith("-100"):
+                chat_id_for_link = str(group_id)[4:]
+                open_link = f"https://t.me/c/{chat_id_for_link}/{message_id}"
+            else:
+                open_link = f"Message ID: `{message_id}`"
+
+            text += (
+                f"- `[{time_str}]` *{group_title}* — *{sender}*\n"
+                f"  {preview}...\n"
             )
-        elif str(group_id).startswith("-100"):
-            chat_id_for_link = str(group_id)[4:]
-            msg += (
-                f"  Open: https://t.me/c/{chat_id_for_link}/{message_id}\n\n"
-            )
-        else:
-            msg += f"  Message ID: {message_id}\n\n"
 
-    await update.message.reply_text(msg, parse_mode="Markdown")
+            if open_link.startswith("http") or open_link.startswith("tg://"):
+                text += f"  [Open message]({open_link})\n\n"
+            else:
+                text += f"  {open_link}\n\n"
+
+        return text
+
+    msg = "📊 *Summary — Pending & Ignored Messages*\n\n"
+    msg += build_section("⏳ Pending", pending)
+    msg += build_section("🚫 Ignored", ignored)
+
+    await update.message.reply_text(
+        msg,
+        parse_mode="Markdown",
+        disable_web_page_preview=True,
+    )
 
 
 async def clear_today(update, context: ContextTypes.DEFAULT_TYPE):
     """Clear today's pending & ignored messages from the database."""
-    # Only boss can clear
     if update.effective_user.id != BOSS_ID:
         return
 
@@ -113,7 +142,6 @@ async def clear_today(update, context: ContextTypes.DEFAULT_TYPE):
         status = entry.get("status")
         t_str = entry.get("time")
 
-        # If time is missing or invalid, keep the entry
         try:
             dt = datetime.fromisoformat(t_str) if t_str else None
         except Exception:
@@ -122,7 +150,6 @@ async def clear_today(update, context: ContextTypes.DEFAULT_TYPE):
         is_today = dt is not None and dt.date() == today
         is_target_status = status in ("pending", "ignored")
 
-        # Remove only today's pending/ignored; keep everything else
         if is_today and is_target_status:
             removed += 1
             continue
@@ -132,43 +159,66 @@ async def clear_today(update, context: ContextTypes.DEFAULT_TYPE):
     save_db(new_db)
 
     if removed == 0:
-        await update.message.reply_text("🧹 No pending or ignored messages for today to clear.")
+        await update.message.reply_text(
+            "🧹 No pending or ignored messages for today to clear."
+        )
     else:
-        await update.message.reply_text(f"🧹 Cleared {removed} pending/ignored messages for today.")
+        await update.message.reply_text(
+            f"🧹 Cleared {removed} pending/ignored messages for today."
+        )
 
 
 # ------------------- MESSAGE WATCHER (GROUPS) -------------------
 async def watch_messages(update, context: ContextTypes.DEFAULT_TYPE):
-    """Detect trigger words or boss mentions in groups"""
+    """
+    Detect trigger words or boss mentions in groups.
+    Some triggers send alerts to personal chat (BOSS_ID),
+    others to ALERT_GROUP_ID.
+    """
     if not update.message or not update.message.text:
         return
 
-    # Only care about group chats here
     if update.message.chat.type not in ("group", "supergroup"):
         return
 
     text = update.message.text.lower()
-    triggered = False
+    triggered_to_boss = False
+    triggered_to_group = False
     print("New message:", text)
     print("Chat info:", update.message.chat)
 
-    # Check trigger words
-    for word in TRIGGER_WORDS:
+    # Check triggers for boss
+    for word in TRIGGERS_TO_BOSS:
         if word.lower() in text:
-            triggered = True
+            triggered_to_boss = True
             break
 
-    # Check if boss is mentioned (@kiengyang)
+    # Check triggers for alert group (if boss not already triggered)
+    if not triggered_to_boss:
+        for word in TRIGGERS_TO_GROUP:
+            if word.lower() in text:
+                triggered_to_group = True
+                break
+
+    # Direct mention of boss username -> force boss
     if update.message.entities:
         for entity in update.message.entities:
             if (
                 entity.type == "mention"
                 and "@kiengyang" in update.message.text.lower()
             ):
-                triggered = True
+                triggered_to_boss = True
+                triggered_to_group = False
+                break
 
-    if not triggered:
+    if not triggered_to_boss and not triggered_to_group:
         return
+
+    # Decide destination
+    if triggered_to_boss:
+        dest_chat_id = BOSS_ID
+    else:
+        dest_chat_id = ALERT_GROUP_ID
 
     # Save message info
     db = load_db()
@@ -186,22 +236,19 @@ async def watch_messages(update, context: ContextTypes.DEFAULT_TYPE):
     }
     save_db(db)
 
-    # ------------------- BUILD BUTTONS -------------------
+    # Build open link
     open_url = None
     chat_id_str = str(update.message.chat.id)
 
     if update.message.chat.username:
-        # public group/channel with username
         open_url = (
             f"tg://resolve?domain={update.message.chat.username}"
             f"&post={update.message.message_id}"
         )
     elif chat_id_str.startswith("-100"):
-        # private supergroup/channel
         chat_id_for_link = chat_id_str[4:]
         open_url = f"https://t.me/c/{chat_id_for_link}/{update.message.message_id}"
     else:
-        # normal private group: no message link in Telegram API
         print("No open_url for this chat (ChatType.GROUP).")
 
     buttons = [[InlineKeyboardButton("Reply", callback_data=f"reply|{key}")]]
@@ -214,9 +261,9 @@ async def watch_messages(update, context: ContextTypes.DEFAULT_TYPE):
     )
     kb = InlineKeyboardMarkup(buttons)
 
-    # Forward alert to boss
+    # Forward alert to destination
     await context.bot.send_message(
-        chat_id=BOSS_ID,
+        chat_id=dest_chat_id,
         text=(
             f"⚠ **Mention Alert**\n"
             f"From: {update.message.from_user.full_name}\n"
@@ -227,7 +274,7 @@ async def watch_messages(update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
     )
 
-    print(f"Forwarded message {key} to boss with buttons.")
+    print(f"Forwarded message {key} to {dest_chat_id} with buttons.")
 
 
 # ------------------- INLINE BUTTON HANDLER -------------------
@@ -252,52 +299,55 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if action == "reply":
-        reply_map[BOSS_ID] = key
-        print(f"Reply mode ON for boss, key={key}")
+        # Use the user who pressed the button as the reply owner (usually boss)
+        reply_map[query.from_user.id] = key
+        print(f"Reply mode ON for user={query.from_user.id}, key={key}")
         await query.edit_message_text(
             "✏️ Reply mode activated. Send your reply below in this private chat and it will be forwarded to the group automatically."
         )
 
 
-# ------------------- BOSS REPLY HANDLER -------------------
+# ------------------- REPLY HANDLER -------------------
 async def reply_to_group(update, context: ContextTypes.DEFAULT_TYPE):
-    """Forward boss reply to the original group (private or public)"""
+    """
+    Forward reply (from boss or whoever clicked Reply) to the original group
+    as a forwarded message.
+    """
     if not update.message:
         return
 
-    # Only messages from boss are interesting here
-    if update.effective_user.id != BOSS_ID:
+    user_id = update.effective_user.id
+
+    # Only handle replies from users who are in reply_map
+    if user_id not in reply_map:
+        print("Message from user without active reply_map -> ignore.")
         return
 
-    print("Boss sent:", update.message)
-    print("Boss chat info:", update.message.chat)
+    print("Reply user sent:", update.message)
+    print("Reply user chat info:", update.message.chat)
 
-    if BOSS_ID not in reply_map:
-        print("Boss message but reply_map is empty -> ignore.")
-        return
-
-    key = reply_map[BOSS_ID]
+    key = reply_map[user_id]
     db = load_db()
 
     if key not in db:
         await update.message.reply_text("❌ Original message expired.")
-        del reply_map[BOSS_ID]
+        del reply_map[user_id]
         return
 
     entry = db[key]
     print("reply_to_group triggered")
-    print("Forwarding boss reply message")
+    print("Forwarding reply message")
     print("Target chat_id:", entry["group_id"], "message_id:", entry["message_id"])
 
-    # Forward the boss's message (text, voice, photo, etc.)
+    # Forward the user's message (text, voice, photo, etc.) to the original group
     await update.message.forward(chat_id=entry["group_id"])
 
     db[key]["status"] = "replied"
     save_db(db)
 
-    await update.message.reply_text("✅ Your reply has been forwarded.")
-    del reply_map[BOSS_ID]
-    print("Reply mode OFF for boss")
+    await update.message.reply_text("✅ Your reply has been forwarded to the group.")
+    del reply_map[user_id]
+    print(f"Reply mode OFF for user={user_id}")
 
 
 # ------------------- DAILY SUMMARY -------------------
@@ -305,55 +355,75 @@ async def daily_summary(job):
     """Send daily summary of pending and ignored messages, with timestamps."""
     db = load_db()
 
-    items = [
-        entry
-        for entry in db.values()
-        if entry.get("status") in ("pending", "ignored")
-    ]
+    pending = []
+    ignored = []
 
-    if not items:
+    for entry in db.values():
+        status = entry.get("status")
+        if status == "pending":
+            pending.append(entry)
+        elif status == "ignored":
+            ignored.append(entry)
+
+    if not pending and not ignored:
         await job.bot.send_message(BOSS_ID, "📊 No pending or ignored messages today.")
         return
 
-    # Sort by time (oldest first)
-    try:
-        items.sort(key=lambda e: datetime.fromisoformat(e["time"]))
-    except Exception:
-        pass
+    def build_section(title, items):
+        if not items:
+            return f"*{title}*\n_No messages._\n\n"
 
-    msg = "📊 **Daily Summary — Pending & Ignored Messages**\n\n"
-    for e in items:
-        status = e.get("status", "unknown").capitalize()
         try:
-            dt = datetime.fromisoformat(e["time"])
-            time_str = dt.strftime("%Y-%m-%d %H:%M")
+            items.sort(key=lambda e: datetime.fromisoformat(e["time"]))
         except Exception:
-            time_str = e.get("time", "Unknown time")
+            pass
 
-        msg += (
-            f"- [{status}] From *{e['sender']}* in *{e.get('group_title', 'group')}* "
-            f"at `{time_str}`:\n"
-        )
-        msg += f"  {e['text'][:100]}...\n"
+        text = f"*{title}*\n"
+        for e in items:
+            try:
+                dt = datetime.fromisoformat(e["time"])
+                time_str = dt.strftime("%Y-%m-%d %H:%M")
+            except Exception:
+                time_str = e.get("time", "Unknown time")
 
-        group_username = e.get("group_username")
-        group_id = e.get("group_id")
-        message_id = e.get("message_id")
+            group_title = e.get("group_title", "group")
+            sender = e.get("sender", "Unknown")
+            preview = (e.get("text") or "").replace("\n", " ")[:80]
 
-        if group_username:
-            msg += (
-                f"  Open: tg://resolve?domain={group_username}"
-                f"&post={message_id}\n\n"
+            group_username = e.get("group_username")
+            group_id = e.get("group_id")
+            message_id = e.get("message_id")
+
+            if group_username:
+                open_link = f"tg://resolve?domain={group_username}&post={message_id}"
+            elif str(group_id).startswith("-100"):
+                chat_id_for_link = str(group_id)[4:]
+                open_link = f"https://t.me/c/{chat_id_for_link}/{message_id}"
+            else:
+                open_link = f"Message ID: `{message_id}`"
+
+            text += (
+                f"- `[{time_str}]` *{group_title}* — *{sender}*\n"
+                f"  {preview}...\n"
             )
-        elif str(group_id).startswith("-100"):
-            chat_id_for_link = str(group_id)[4:]
-            msg += (
-                f"  Open: https://t.me/c/{chat_id_for_link}/{message_id}\n\n"
-            )
-        else:
-            msg += f"  Message ID: {message_id}\n\n"
 
-    await job.bot.send_message(BOSS_ID, msg, parse_mode="Markdown")
+            if open_link.startswith("http") or open_link.startswith("tg://"):
+                text += f"  [Open message]({open_link})\n\n"
+            else:
+                text += f"  {open_link}\n\n"
+
+        return text
+
+    msg = "📊 *Daily Summary — Pending & Ignored Messages*\n\n"
+    msg += build_section("⏳ Pending", pending)
+    msg += build_section("🚫 Ignored", ignored)
+
+    await job.bot.send_message(
+        BOSS_ID,
+        msg,
+        parse_mode="Markdown",
+        disable_web_page_preview=True,
+    )
 
 
 # ------------------- MAIN -------------------
@@ -377,15 +447,16 @@ def main():
     app.add_handler(CommandHandler("summary", manual_summary))
     app.add_handler(CommandHandler("clear_today", clear_today))
 
-    # IMPORTANT: boss handler first, then group watcher
+    # Replies from boss / whoever clicked Reply button
     app.add_handler(
         MessageHandler(
-            filters.ALL & filters.User(user_id=BOSS_ID),
+            filters.ALL & ~filters.COMMAND,
             reply_to_group,
         ),
         group=0,
     )
 
+    # Group watcher (must come after reply handler)
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
