@@ -4,6 +4,8 @@ services:
     container_name: boss-bot
     restart: unless-stopped
     env_file:
-      - .env        # reuse your existing .env with BOT_TOKEN, BOSS_ID
+      - .env
     working_dir: /app
-    command: ["python", "-m", "app.bot"]
+    volumes:
+      - .:/app
+    command: ["sh", "-c", "while true; do python -m app.bot; sleep 2; done"]  # ← PUT IT HERE

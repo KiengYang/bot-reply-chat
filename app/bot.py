@@ -28,7 +28,7 @@ DB_FILE = "app/db.json"
 
 # key = user_id (boss or alert group admin), value = message key in DB
 reply_map = {}
-
+last_triggered_users = {}
 
 # ------------------- DATABASE HELPERS -------------------
 def load_db():
@@ -119,7 +119,7 @@ async def manual_summary(update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         msg,
-        parse_mode="Markdown",
+ #       parse_mode="Markdown",
         disable_web_page_preview=True,
     )
 
@@ -211,8 +211,21 @@ async def watch_messages(update, context: ContextTypes.DEFAULT_TYPE):
                 triggered_to_group = False
                 break
 
-    if not triggered_to_boss and not triggered_to_group:
-        return
+
+    if triggered_to_boss or triggered_to_group:
+        chat_id = update.message.chat.id
+        if triggered_to_boss:
+            dest_chat_id = BOSS_ID
+        else:
+            dest_chat_id = ALERT_GROUP_ID
+
+        last_triggered_users[chat_id] = (
+            update.message.from_user.id,
+            datetime.now(),
+            dest_chat_id,)
+        print(f"Tracked trigger: {update.message.from_user.full_name} in {chat_id}")
+        if not triggered_to_boss and not triggered_to_group:
+            return
 
     # Decide destination
     if triggered_to_boss:
@@ -271,11 +284,34 @@ async def watch_messages(update, context: ContextTypes.DEFAULT_TYPE):
             f"{update.message.text}"
         ),
         reply_markup=kb,
-        parse_mode="Markdown",
+        #parse_mode="Markdown",
     )
 
     print(f"Forwarded message {key} to {dest_chat_id} with buttons.")
 
+# ------------------- VOICE WACHTER -------------------
+
+async def watch_voice(update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.voice:
+        return
+    if update.message.chat.type not in ("group", "supergroup"):
+        return
+
+    chat_id = update.message.chat.id
+    if chat_id not in last_triggered_users:
+        return
+
+    trigger_user_id, trigger_time, dest_chat_id = last_triggered_users[chat_id]
+
+    if update.message.from_user.id != trigger_user_id:
+        return
+
+    time_diff = (datetime.now() - trigger_time).total_seconds()
+    if time_diff > 60:
+        return
+
+    await update.message.forward(dest_chat_id)
+    print(f"✅ Voice forwarded ({time_diff:.0f}s after trigger)")
 
 # ------------------- INLINE BUTTON HANDLER -------------------
 async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
@@ -421,10 +457,9 @@ async def daily_summary(job):
     await job.bot.send_message(
         BOSS_ID,
         msg,
-        parse_mode="Markdown",
+     #   parse_mode="Markdown",
         disable_web_page_preview=True,
     )
-
 
 # ------------------- MAIN -------------------
 def main():
@@ -446,7 +481,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("summary", manual_summary))
     app.add_handler(CommandHandler("clear_today", clear_today))
-
+    app.add_handler(MessageHandler(filters.VOICE, watch_voice), group=2)
     # Replies from boss / whoever clicked Reply button
     app.add_handler(
         MessageHandler(
