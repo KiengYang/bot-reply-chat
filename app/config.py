@@ -14,13 +14,13 @@ TRIGGERS_TO_GROUP = ["yang",]
 
 # Map trigger words to boss groups (and optional topic/thread id)
 ROUTES = {
-    "kiss": {
-        "boss_chat": BOSS_ID,  # TODO: replace with real boss group chat_id
-        "thread_id": None,           # or an integer thread/topic id if you use topics
-    },
-    "option": {
-        "boss_chat": ALERT_GROUP_ID, # another boss group
-        "thread_id": THREAD_TEST,
-    },
-    # add more triggers as needed
+    # "": {
+    #     "boss_chat": BOSS_ID,  # TODO: replace with real boss group chat_id
+    #     "thread_id": None,           # or an integer thread/topic id if you use topics
+    # },
+    # "option": {
+    #     "boss_chat": ALERT_GROUP_ID, # another boss group
+    #     "thread_id": THREAD_TEST,
+    # },
+    # # add more triggers as needed
 }

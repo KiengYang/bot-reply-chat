@@ -1,1 +1,22 @@
-{}
+{
+    "-1003404181435_112": {
+        "group_id": -1003404181435,
+        "group_title": "testing_1",
+        "group_username": "",
+        "message_id": 112,
+        "text": "plan",
+        "sender": "Kieng Yang",
+        "time": "2025-12-19T01:32:42.245358",
+        "status": "replied"
+    },
+    "-1003404181435_113": {
+        "group_id": -1003404181435,
+        "group_title": "testing_1",
+        "group_username": "",
+        "message_id": 113,
+        "text": "plan",
+        "sender": "Kieng Yang",
+        "time": "2025-12-19T01:32:55.044671",
+        "status": "ignored"
+    }
+}
