@@ -16,13 +16,16 @@ from telegram.request import HTTPXRequest
 # ------------------- CONFIG -------------------
 # app.config should define:
 # BOT_TOKEN, BOSS_ID, ALERT_GROUP_ID, TRIGGERS_TO_BOSS, TRIGGERS_TO_GROUP
+
 from app.config import (
     BOT_TOKEN,
     BOSS_ID,
     ALERT_GROUP_ID,
     TRIGGERS_TO_BOSS,
     TRIGGERS_TO_GROUP,
+    ROUTES,
 )
+
 
 DB_FILE = "app/db.json"
 
@@ -169,31 +172,37 @@ async def clear_today(update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ------------------- MESSAGE WATCHER (GROUPS) -------------------
+
 async def watch_messages(update, context: ContextTypes.DEFAULT_TYPE):
     """
     Detect trigger words or boss mentions in groups.
-    Some triggers send alerts to personal chat (BOSS_ID),
-    others to ALERT_GROUP_ID.
+    Some triggers route via ROUTES, others use legacy boss/group logic.
     """
     if not update.message or not update.message.text:
         return
-
     if update.message.chat.type not in ("group", "supergroup"):
         return
 
     text = update.message.text.lower()
-    triggered_to_boss = False
-    triggered_to_group = False
     print("New message:", text)
     print("Chat info:", update.message.chat)
 
-    # Check triggers for boss
+    # ---------- 1) ROUTES-BASED TRIGGERS ----------
+    route = None
+    for word, info in ROUTES.items():
+        if word in text:
+            route = info
+            break
+
+    # ---------- 2) LEGACY TRIGGERS (fallback) ----------
+    triggered_to_boss = False
+    triggered_to_group = False
+
     for word in TRIGGERS_TO_BOSS:
         if word.lower() in text:
             triggered_to_boss = True
             break
 
-    # Check triggers for alert group (if boss not already triggered)
     if not triggered_to_boss:
         for word in TRIGGERS_TO_GROUP:
             if word.lower() in text:
@@ -211,32 +220,33 @@ async def watch_messages(update, context: ContextTypes.DEFAULT_TYPE):
                 triggered_to_group = False
                 break
 
+    # Nothing triggered at all -> stop
+    if route is None and not triggered_to_boss and not triggered_to_group:
+        return
 
-    if triggered_to_boss or triggered_to_group:
-        chat_id = update.message.chat.id
+    # ---------- 3) DECIDE DESTINATION ----------
+    if route is not None:
+        dest_chat_id = route["boss_chat"]
+        thread_id = route.get("thread_id")
+    else:
+        thread_id = None
         if triggered_to_boss:
             dest_chat_id = BOSS_ID
         else:
             dest_chat_id = ALERT_GROUP_ID
 
-        last_triggered_users[chat_id] = (
-            update.message.from_user.id,
-            datetime.now(),
-            dest_chat_id,)
-        print(f"Tracked trigger: {update.message.from_user.full_name} in {chat_id}")
-        if not triggered_to_boss and not triggered_to_group:
-            return
+    # Track trigger user for later voice forwarding
+    chat_id = update.message.chat.id
+    last_triggered_users[chat_id] = (
+        update.message.from_user.id,
+        datetime.now(),
+        dest_chat_id,
+    )
+    print(f"Tracked trigger: {update.message.from_user.full_name} in {chat_id}")
 
-    # Decide destination
-    if triggered_to_boss:
-        dest_chat_id = BOSS_ID
-    else:
-        dest_chat_id = ALERT_GROUP_ID
-
-    # Save message info
+    # ---------- 4) SAVE MESSAGE INFO ----------
     db = load_db()
     key = f"{update.message.chat.id}_{update.message.message_id}"
-
     db[key] = {
         "group_id": update.message.chat.id,
         "group_title": update.message.chat.title or "group",
@@ -249,7 +259,7 @@ async def watch_messages(update, context: ContextTypes.DEFAULT_TYPE):
     }
     save_db(db)
 
-    # Build open link
+    # ---------- 5) BUILD BUTTONS ----------
     open_url = None
     chat_id_str = str(update.message.chat.id)
 
@@ -257,24 +267,32 @@ async def watch_messages(update, context: ContextTypes.DEFAULT_TYPE):
         open_url = (
             f"tg://resolve?domain={update.message.chat.username}"
             f"&post={update.message.message_id}"
-        )
+    )
     elif chat_id_str.startswith("-100"):
         chat_id_for_link = chat_id_str[4:]
         open_url = f"https://t.me/c/{chat_id_for_link}/{update.message.message_id}"
     else:
         print("No open_url for this chat (ChatType.GROUP).")
+    buttons = []
 
-    buttons = [[InlineKeyboardButton("Reply", callback_data=f"reply|{key}")]]
+# Open in group button (keep as is if you like)
     if open_url:
-        buttons[0].append(
-            InlineKeyboardButton("Open in group", url=open_url)
-        )
+        buttons.append([InlineKeyboardButton("Open in group", url=open_url)])
+
+# Status toggle button
+    buttons.append(
+        [InlineKeyboardButton("Mark as replied", callback_data=f"toggle|{key}")]
+    )
+
+# Keep Ignore button
     buttons.append(
         [InlineKeyboardButton("Ignore", callback_data=f"ignore|{key}")]
     )
+
     kb = InlineKeyboardMarkup(buttons)
 
-    # Forward alert to destination
+
+    # ---------- 6) SEND ALERT ----------
     await context.bot.send_message(
         chat_id=dest_chat_id,
         text=(
@@ -284,10 +302,14 @@ async def watch_messages(update, context: ContextTypes.DEFAULT_TYPE):
             f"{update.message.text}"
         ),
         reply_markup=kb,
-        #parse_mode="Markdown",
+        # message_thread_id is used only when you want a topic; for now you can
+        # either pass it or leave it out if you prefer main chat
+        message_thread_id=thread_id,
+        # parse_mode="Markdown",
     )
 
     print(f"Forwarded message {key} to {dest_chat_id} with buttons.")
+
 
 # ------------------- VOICE WACHTER -------------------
 
@@ -342,6 +364,11 @@ async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
             "✏️ Reply mode activated. Send your reply below in this private chat and it will be forwarded to the group automatically."
         )
 
+    if action == "toggle":
+        db[key]["status"] = "replied"
+        save_db(db)
+        await query.edit_message_text("✅ Marked as replied.")
+        return
 
 # ------------------- REPLY HANDLER -------------------
 async def reply_to_group(update, context: ContextTypes.DEFAULT_TYPE):
