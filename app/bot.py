@@ -120,11 +120,17 @@ async def manual_summary(update, context: ContextTypes.DEFAULT_TYPE):
     msg += build_section("⏳ Pending", pending)
     msg += build_section("🚫 Ignored", ignored)
 
+
+    MAX_LEN = 4000  # a bit under Telegram's 4096 limit
+
+    if len(msg) > MAX_LEN:
+        msg = msg[:MAX_LEN - 50] + "\n\n... truncated, too many items."
+
     await update.message.reply_text(
         msg,
- #       parse_mode="Markdown",
         disable_web_page_preview=True,
     )
+
 
 
 async def clear_today(update, context: ContextTypes.DEFAULT_TYPE):
@@ -170,6 +176,18 @@ async def clear_today(update, context: ContextTypes.DEFAULT_TYPE):
             f"🧹 Cleared {removed} pending/ignored messages for today."
         )
 
+# ------------------- summary clear (GROUPS) -------------------
+
+async def clear_all(update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != BOSS_ID:
+        return  # only boss can clear
+
+    db = load_db()
+    count = len(db)
+    db.clear()
+    save_db(db)
+
+    await update.message.reply_text(f"🧹 Cleared ALL {count} stored alerts.")
 
 # ------------------- MESSAGE WATCHER (GROUPS) -------------------
 
@@ -509,6 +527,7 @@ def main():
     app.add_handler(CommandHandler("summary", manual_summary))
     app.add_handler(CommandHandler("clear_today", clear_today))
     app.add_handler(MessageHandler(filters.VOICE, watch_voice), group=2)
+    app.add_handler(CommandHandler("clear_all", clear_all))
     # Replies from boss / whoever clicked Reply button
     app.add_handler(
         MessageHandler(
