@@ -210,6 +210,7 @@ async def watch_messages(update, context: ContextTypes.DEFAULT_TYPE):
     for word, info in ROUTES.items():
         if word in text:
             route = info
+            trigger_word = word
             break
 
     # ---------- 2) LEGACY TRIGGERS (fallback) ----------
@@ -219,12 +220,14 @@ async def watch_messages(update, context: ContextTypes.DEFAULT_TYPE):
     for word in TRIGGERS_TO_BOSS:
         if word.lower() in text:
             triggered_to_boss = True
+            trigger_word = word
             break
 
     if not triggered_to_boss:
         for word in TRIGGERS_TO_GROUP:
             if word.lower() in text:
                 triggered_to_group = True
+                trigger_word = word
                 break
 
     # Direct mention of boss username -> force boss
@@ -314,16 +317,15 @@ async def watch_messages(update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(
         chat_id=dest_chat_id,
         text=(
-            f"⚠ **Mention Alert**\n"
-            f"From: {update.message.from_user.full_name}\n"
-            f"Group: {update.message.chat.title}\n\n"
-            f"{update.message.text}"
+            f"📣 Dear Mr. @{update.message.from_user.username or update.message.from_user.full_name}\n"
+            f"👤 From: {update.message.from_user.full_name}\n"
+            f"🎯 Group: {update.message.chat.title}\n"
+            f"💡 Keyword: \"{trigger_word or 'N/A'}\"\n"
+            f"Please Mr. @{update.message.from_user.username or update.message.from_user.full_name}, kindly check and reply.\n"
+            f"✉️ For more details, please see below 👇\n {update.message.text}"
         ),
         reply_markup=kb,
-        # message_thread_id is used only when you want a topic; for now you can
-        # either pass it or leave it out if you prefer main chat
         message_thread_id=thread_id,
-        # parse_mode="Markdown",
     )
 
     print(f"Forwarded message {key} to {dest_chat_id} with buttons.")
@@ -527,6 +529,7 @@ def main():
     app.add_handler(CommandHandler("summary", manual_summary))
     app.add_handler(CommandHandler("clear_today", clear_today))
     app.add_handler(MessageHandler(filters.VOICE, watch_voice), group=2)
+
     app.add_handler(CommandHandler("clear_all", clear_all))
     # Replies from boss / whoever clicked Reply button
     app.add_handler(
