@@ -205,6 +205,8 @@ async def watch_messages(update, context: ContextTypes.DEFAULT_TYPE):
     print("New message:", text)
     print("Chat info:", update.message.chat)
 
+    text = update.message.text.lower()
+    trigger_word = None
     # ---------- 1) ROUTES-BASED TRIGGERS ----------
     route = None
     for word, info in ROUTES.items():
@@ -265,6 +267,11 @@ async def watch_messages(update, context: ContextTypes.DEFAULT_TYPE):
     )
     print(f"Tracked trigger: {update.message.from_user.full_name} in {chat_id}")
 
+    mentions = []
+    if route is not None:
+        mentions = route.get("mentions", [])
+    mention_line = ", ".join(mentions) if mentions else "N/A"
+
     # ---------- 4) SAVE MESSAGE INFO ----------
     db = load_db()
     key = f"{update.message.chat.id}_{update.message.message_id}"
@@ -317,11 +324,11 @@ async def watch_messages(update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(
         chat_id=dest_chat_id,
         text=(
-            f"📣 Dear Mr. @{update.message.from_user.username or update.message.from_user.full_name}\n"
+            f"📣 Dear Mr. {mention_line}\n"
             f"👤 From: {update.message.from_user.full_name}\n"
             f"🎯 Group: {update.message.chat.title}\n"
             f"💡 Keyword: \"{trigger_word or 'N/A'}\"\n"
-            f"Please Mr. @{update.message.from_user.username or update.message.from_user.full_name}, kindly check and reply.\n"
+            f"Please Mr. {mention_line}, kindly check and reply.\n"
             f"✉️ For more details, please see below 👇\n {update.message.text}"
         ),
         reply_markup=kb,
