@@ -2,6 +2,7 @@ import json
 import os
 from datetime import datetime, time
 
+from telegram.error import BadRequest, Forbidden
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -366,35 +367,63 @@ async def watch_voice(update, context: ContextTypes.DEFAULT_TYPE):
 async def button_handler(update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data = query.data.split("|")
-    action = data[0]
-    key = data[1]
 
-    print("Button clicked:", data)
+    # Safer split in case your key contains "|"
+    action, key = query.data.split("|", 1)
+
     db = load_db()
-
     if key not in db:
-        await query.edit_message_text("❌ Message expired or not found.")
+        # remove buttons if the record is missing
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
         return
 
+    # Update status in db
     if action == "ignore":
         db[key]["status"] = "ignored"
         save_db(db)
-        await query.edit_message_text("Ignored.")
+
+        # ✅ Hide the whole alert message by deleting it
+        try:
+            await context.bot.delete_message(
+                chat_id=query.message.chat_id,
+                message_id=query.message.message_id,
+            )
+        except (Forbidden, BadRequest):
+            # Fallback: if bot can't delete (permissions), at least replace text & remove buttons
+            try:
+                await query.edit_message_text("🚫 Ignored.")
+            except Exception:
+                try:
+                    await query.edit_message_reply_markup(reply_markup=None)
+                except Exception:
+                    pass
         return
 
-    if action == "reply":
-        # Use the user who pressed the button as the reply owner (usually boss)
-        reply_map[query.from_user.id] = key
-        print(f"Reply mode ON for user={query.from_user.id}, key={key}")
-        await query.edit_message_text(
-            "✏️ Reply mode activated. Send your reply below in this private chat and it will be forwarded to the group automatically."
-        )
-
     if action == "toggle":
-        db[key]["status"] = "replied"
+        # toggle replied <-> pending (optional; or just set replied)
+        current = db[key].get("status", "pending")
+        db[key]["status"] = "replied" if current != "replied" else "pending"
         save_db(db)
-        await query.edit_message_text("✅ Marked as replied.")
+
+        # ✅ Delete message to “hide” it
+        try:
+            await context.bot.delete_message(
+                chat_id=query.message.chat_id,
+                message_id=query.message.message_id,
+            )
+        except (Forbidden, BadRequest):
+            # Fallback: edit message text instead
+            label = "✅ Marked as replied." if db[key]["status"] == "replied" else "↩️ Marked as pending."
+            try:
+                await query.edit_message_text(label)
+            except Exception:
+                try:
+                    await query.edit_message_reply_markup(reply_markup=None)
+                except Exception:
+                    pass
         return
 
 # ------------------- REPLY HANDLER -------------------

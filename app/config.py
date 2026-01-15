@@ -8,7 +8,7 @@ BOSS_ID = int(os.getenv("BOSS_ID")) if os.getenv("BOSS_ID") else None
 ALERT_GROUP_ID = int(os.getenv("GROUP_ID")) if os.getenv("GROUP_ID") else None
 THREAD_TEST = int(os.getenv("THREAD_TEST")) if os.getenv("THREAD_TEST") else None
 
-TRIGGERS_TO_BOSS = ["longdy" "longdy_seng","@longdy_seng"]
+TRIGGERS_TO_BOSS = ["longdy","longdy_seng","@longdy_seng"]
 TRIGGERS_TO_GROUP = []
 
 
