@@ -48,13 +48,11 @@ This repository serves as a solid foundation for Telegram bots that require reli
 
 ```
 
-boss-bot/
+app/
 ├── bot.py / main.py        # Application entry point
-├── handlers/              # Command & message handlers
-├── utils/                 # Shared utilities
-├── requirements.txt
-├── .env.example
-└── README.md
+├── config.py/             # Command & message handlers
+├── __init__.py/                 # Shared utilities
+
 
 ````
 
