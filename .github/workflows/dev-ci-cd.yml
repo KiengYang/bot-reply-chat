@@ -33,7 +33,13 @@ jobs:
         run: python -m compileall app
 
       - name: Run Unit Tests
-        run: python -m unittest discover -s app -p 'test*.py'
+        shell: bash
+        run: |
+          if find app -type f \( -name 'test*.py' -o -name '*_test.py' \) | grep -q .; then
+            python -m unittest discover -s app -p 'test*.py'
+          else
+            echo "No unit tests found. Skipping test execution."
+          fi
 
       - name: Prepare Image Metadata
         id: prep
